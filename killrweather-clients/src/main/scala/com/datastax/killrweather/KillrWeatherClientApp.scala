@@ -47,12 +47,11 @@ final class ApiNodeGuardian extends ClusterAwareNodeGuardian with ClientHelper {
 
   var task: Option[Cancellable] = None
 
- /* override def preStart(): Unit = {
+  override def preStart(): Unit = {
     super.preStart()
-    cluster.join(base)
-    cluster.joinSeedNodes(Vector(base))
+    cluster.joinSeedNodes(Vector(cluster.selfAddress))
   }
-*/
+
   Cluster(context.system).registerOnMemberUp {
     task = Some(context.system.scheduler.schedule(Duration.Zero, 2.seconds) {
       api ! Event.QueryTask
