@@ -89,7 +89,7 @@ class KillrWeather(system: ExtendedActorSystem) extends Extension {
   protected val ssc = new StreamingContext(conf, Milliseconds(SparkStreamingBatchInterval))
 
   /* The root supervisor and traffic controller of the app. All inbound messages go through this actor. */
-  private val guardian = system.actorOf(Props(new NodeGuardian(ssc, kafka, settings)), "node-guardian")
+  val guardian = system.actorOf(Props(new NodeGuardian(ssc, kafka, settings)), "node-guardian")
 
   private val cluster = Cluster(system)
 
@@ -111,8 +111,7 @@ class KillrWeather(system: ExtendedActorSystem) extends Extension {
 
       (guardian ? GracefulShutdown).mapTo[Future[Boolean]]
         .onComplete { _ =>
-        system.shutdown()
-        system.awaitTermination(timeout.duration)
+        system.terminate()
       }
     }
   }

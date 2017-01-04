@@ -29,7 +29,7 @@ object Versions {
   val Kafka          = "0.8.2.1"
   val Kryo           = "3.0.0"
   val Logback        = "1.0.13"
-  val Scala          = "2.11.8"// waiting for spark-streaming-kafka to be supported in scala 2.11
+  val Scala          = "2.11.8"
   val Pickling       = "0.10.1"
   val ScalaTest      = "2.2.2"
   val Scalaz         = "7.1.0"
