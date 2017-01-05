@@ -156,4 +156,20 @@ object Weather {
                          high: Double,
                          low: Double) extends Temperature
 
+  /** Greenhouse specific */
+  trait RawMeasure extends WeatherModel with Serializable {
+    def year: String
+    def eventTime: DateTime
+    def value: Float
+    def gardenApiKey: String
+    def sensorSlug: String
+    def userId: BigInt
+  }
+
+  case class Measure(year: String,
+                     eventTime: DateTime,
+                     value: Float,
+                     gardenApiKey: String,
+                     sensorSlug: String,
+                     userId: BigInt) extends RawMeasure
 }

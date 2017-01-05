@@ -15,13 +15,11 @@
  */
 package com.datastax.killrweather
 
-import com.datastax.killrweather.cluster.ClusterAwareNodeGuardian
-
-import scala.concurrent.duration._
 import akka.actor.{Actor, Props}
-import org.apache.spark.streaming.kafka.KafkaInputDStream
-import org.apache.spark.streaming.StreamingContext
+import com.datastax.killrweather.cluster.ClusterAwareNodeGuardian
 import com.datastax.spark.connector.embedded._
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.kafka.KafkaInputDStream
 
 /** A `NodeGuardian` manages the worker actors at the root of each KillrWeather
  * deployed application, where any special application logic is handled in the
@@ -45,6 +43,9 @@ class NodeGuardian(ssc: StreamingContext, kafka: EmbeddedKafka, settings: Weathe
   val temperature = context.actorOf(Props(new TemperatureActor(ssc.sparkContext, settings)), "temperature")
   val precipitation = context.actorOf(Props(new PrecipitationActor(ssc, settings)), "precipitation")
   val station = context.actorOf(Props(new WeatherStationActor(ssc.sparkContext, settings)), "weather-station")
+
+  /** Greenhouse specific */
+  val measure = context.actorOf(Props(new MeasureActor(ssc.sparkContext, settings)), "measure")
 
   override def preStart(): Unit = {
     super.preStart()
@@ -71,6 +72,8 @@ class NodeGuardian(ssc: StreamingContext, kafka: EmbeddedKafka, settings: Weathe
     case e: TemperatureRequest    => temperature forward e
     case e: PrecipitationRequest  => precipitation forward e
     case e: WeatherStationRequest => station forward e
+    /** Greenhouse specific */
+    case e: MeasureRequest => measure forward e
     case GracefulShutdown => gracefulShutdown(sender())
   }
 

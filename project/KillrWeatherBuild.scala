@@ -126,6 +126,7 @@ object Dependencies {
     val sparkCatalyst     = "org.apache.spark"    %% "spark-catalyst"                     % Spark sparkExclusions
     val sparkCassandra    = "com.datastax.spark"  %% "spark-cassandra-connector"          % SparkCassandra // ApacheV2
     val sparkCassandraEmb = "com.datastax.spark"  %% "spark-cassandra-connector-embedded" % SparkCassandra embeddedExclusions // ApacheV2
+    var sparkTs           = "com.cloudera.sparkts" % "sparkts"                            % SparkTs
     val sigar             = "org.fusesource"      % "sigar"                               % Sigar
   }
 
@@ -138,7 +139,7 @@ object Dependencies {
 
   val akka = Seq(akkaStream, akkaHttpCore, akkaHttp, akkaSprayJson, akkaActor, akkaCluster, akkaRemote, akkaSlf4j)
 
-  val connector = Seq(driver, sparkCassandra, sparkCatalyst, sparkCassandraEmb)
+  val connector = Seq(driver, sparkCassandra, sparkCatalyst, sparkCassandraEmb, sparkTs)
 
   val json = Seq(json4sCore, json4sJackson, json4sNative)
 

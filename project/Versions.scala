@@ -39,4 +39,5 @@ object Versions {
   val Slf4j          = "1.6.1"
   val Spark          = "1.6.0"
   val SparkCassandra = "1.6.0"
+  val SparkTs        = "0.4.1"
 }

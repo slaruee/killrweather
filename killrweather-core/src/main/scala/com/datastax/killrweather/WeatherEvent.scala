@@ -47,6 +47,9 @@ object WeatherEvent {
   case class GetMonthlyHiLowTemperature(wsid: String, year: Int, month: Int) extends TemperatureRequest
   case class GetMonthlyTemperature(wsid: String, year: Int, month: Int) extends TemperatureRequest
 
+  /** Greenhouse specific */
+  trait MeasureRequest extends WeatherRequest
+  case class GetMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: DateTime, endDate: DateTime) extends MeasureRequest
 
   sealed trait Task extends Serializable
   case object QueryTask extends Task

@@ -17,10 +17,12 @@ import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, Materializer}
 import akka.util.Timeout
-import com.datastax.killrweather.Weather.DailyTemperature
+import com.datastax.killrweather.Weather.Measure
 import com.typesafe.config.{Config, ConfigFactory}
+import org.joda.time.DateTime
 import spray.json.DefaultJsonProtocol
 
+import scala.collection.mutable
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.math._
 
@@ -87,8 +89,12 @@ trait Service extends Protocols {
 
   def fetchWeatherData(): Future[Either[String, String]] = {
     implicit val timeout = Timeout(15, TimeUnit.SECONDS)
-    val future = ask(killrWeather.guardian, WeatherEvent.GetDailyTemperature(Weather.Day("725030:14732",2008,12,1)))
-    val result = Await.result(future, timeout.duration).asInstanceOf[DailyTemperature]
+    val future = ask(killrWeather.guardian, WeatherEvent.GetMeasurePerRange(
+      "24b36a66-ef71-4ec4-a160-919c108395e1",
+      "air-temperature",
+      DateTime.parse("2016-12-24T16:48:17+00:00"),
+      DateTime.parse("2017-01-05T06:48:41+00:00")))
+    val result = Await.result(future, timeout.duration).asInstanceOf[mutable.WrappedArray[Measure]]
 
     Future[Either[String, String]](
       Left(result.toString())

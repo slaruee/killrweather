@@ -166,6 +166,10 @@ final class WeatherSettings(conf: Option[Config] = None) extends Serializable {
   val DataLoadPath = killrweather.getString("data.load.path")
   val DataFileExtension = killrweather.getString("data.file.extension")
 
+  val CassandraGreenHouseKeySpace = killrweather.getString("cassandra.greenhouse.keyspace")
+  val CassandraGreenhouseTableRaw = killrweather.getString("cassandra.greenhouse.table.raw")
+  val CassandraGreenhouseTableSync = killrweather.getString("cassandra.greenhouse.table.sync")
+
   /** Attempts to acquire from environment, then java system properties. */
   def withFallback[T](env: Try[T], key: String): Option[T] = env match {
     case null  => None
