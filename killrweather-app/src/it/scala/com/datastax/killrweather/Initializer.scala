@@ -19,7 +19,7 @@ import akka.actor.ActorRef
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.CassandraConnector
 import com.datastax.spark.connector.embedded.KafkaEvent.KafkaMessageEnvelope
-import org.apache.spark.{Logging, SparkContext}
+import org.apache.spark.{SparkContext}
 import org.apache.spark.rdd.RDD
 
 /**
@@ -27,7 +27,7 @@ import org.apache.spark.rdd.RDD
  * assumes manual creation by running the cql scripts.
  */
 private[killrweather] class Initializer(sc: SparkContext, settings: WeatherSettings)
-  extends Serializable with TestFileHelper with Logging {
+  extends Serializable with TestFileHelper {
 
   import com.datastax.killrweather.Weather._
   import settings._
@@ -69,8 +69,6 @@ private[killrweather] class Initializer(sc: SparkContext, settings: WeatherSetti
   }
 
   private def createSchema(clean: Boolean): Unit = {
-    log.info("Initializing schema.")
-
     CassandraConnector(sc.getConf).withSessionDo { session =>
       // insure for test we are not going to look at existing data, but new from the kafka actor processes
       if (clean) {
@@ -109,8 +107,6 @@ private[killrweather] class Initializer(sc: SparkContext, settings: WeatherSetti
       session.execute( s"""CREATE TABLE IF NOT EXISTS year_cumulative_precip (
          wsid text, year int, precipitation counter, PRIMARY KEY ((wsid), year)
       ) WITH CLUSTERING ORDER BY (year DESC)""")
-
-      log.info("Schema initialized.")
     }
   }
 }

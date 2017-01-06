@@ -37,7 +37,8 @@ object Versions {
   val ScalazStream   = "0.8.6"
   val Sigar          = "1.6.4"
   val Slf4j          = "1.6.1"
-  val Spark          = "1.6.0"
-  val SparkCassandra = "1.6.0"
+  val Spark          = "2.1.0"
+  val SparkStreamingKafka = "2.0.0-preview"
+  val SparkCassandra = "2.0.0-M3"
   val SparkTs        = "0.4.1"
 }

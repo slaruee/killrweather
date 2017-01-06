@@ -1,20 +1,13 @@
 package com.datastax.killrweather;
 
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
 import akka.event.{Logging, LoggingAdapter}
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.client.RequestBuilding
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
-import akka.http.scaladsl.marshalling.ToResponseMarshallable
-import akka.http.scaladsl.model.StatusCodes._
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.pattern.ask
-import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, Materializer}
 import akka.util.Timeout
 import com.datastax.killrweather.Weather.Measure
@@ -24,39 +17,14 @@ import spray.json.DefaultJsonProtocol
 
 import scala.collection.mutable
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
-import scala.math._
 
-case class IpInfo(query: String, country: Option[String], city: Option[String], lat: Option[Double], lon: Option[Double])
-
-case class IpPairSummaryRequest(ip1: String, ip2: String)
-
-case class IpPairSummary(distance: Option[Double], ip1Info: IpInfo, ip2Info: IpInfo)
-
-object IpPairSummary {
-  def apply(ip1Info: IpInfo, ip2Info: IpInfo): IpPairSummary = IpPairSummary(calculateDistance(ip1Info, ip2Info), ip1Info, ip2Info)
-
-  private def calculateDistance(ip1Info: IpInfo, ip2Info: IpInfo): Option[Double] = {
-    (ip1Info.lat, ip1Info.lon, ip2Info.lat, ip2Info.lon) match {
-      case (Some(lat1), Some(lon1), Some(lat2), Some(lon2)) =>
-        // see http://www.movable-type.co.uk/scripts/latlong.html
-        val φ1 = toRadians(lat1)
-        val φ2 = toRadians(lat2)
-        val Δφ = toRadians(lat2 - lat1)
-        val Δλ = toRadians(lon2 - lon1)
-        val a = pow(sin(Δφ / 2), 2) + cos(φ1) * cos(φ2) * pow(sin(Δλ / 2), 2)
-        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        Option(EarthRadius * c)
-      case _ => None
-    }
-  }
-
-  private val EarthRadius = 6371.0
-}
+/** Greenhouse specific */
+case class MeasureRequest(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String)
 
 trait Protocols extends DefaultJsonProtocol {
-  implicit val ipInfoFormat = jsonFormat5(IpInfo.apply)
-  implicit val ipPairSummaryRequestFormat = jsonFormat2(IpPairSummaryRequest.apply)
-  implicit val ipPairSummaryFormat = jsonFormat3(IpPairSummary.apply)
+  /** Greenhouse specific */
+  implicit val measureRequestFormat = jsonFormat4(MeasureRequest.apply)
+  implicit val measureFormat = jsonFormat6(Measure.apply)
 }
 
 trait Service extends Protocols {
@@ -68,65 +36,47 @@ trait Service extends Protocols {
   def config: Config
   val logger: LoggingAdapter
 
-  lazy val ipApiConnectionFlow: Flow[HttpRequest, HttpResponse, Any] =
-    Http().outgoingConnection(config.getString("services.ip-api.host"), config.getInt("services.ip-api.port"))
-
-  def ipApiRequest(request: HttpRequest): Future[HttpResponse] = Source.single(request).via(ipApiConnectionFlow).runWith(Sink.head)
-
-  def fetchIpInfo(ip: String): Future[Either[String, IpInfo]] = {
-    ipApiRequest(RequestBuilding.Get(s"/json/$ip")).flatMap { response =>
-      response.status match {
-        case OK => Unmarshal(response.entity).to[IpInfo].map(Right(_))
-        case BadRequest => Future.successful(Left(s"$ip: incorrect IP format"))
-        case _ => Unmarshal(response.entity).to[String].flatMap { entity =>
-          val error = s"FreeGeoIP request failed with status code ${response.status} and entity $entity"
-          logger.error(error)
-          Future.failed(new IOException(error))
-        }
-      }
-    }
-  }
-
-  def fetchWeatherData(): Future[Either[String, String]] = {
+  def getMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String): Future[Either[String, Array[Measure]]] = {
     implicit val timeout = Timeout(15, TimeUnit.SECONDS)
     val future = ask(killrWeather.guardian, WeatherEvent.GetMeasurePerRange(
-      "24b36a66-ef71-4ec4-a160-919c108395e1",
-      "air-temperature",
-      DateTime.parse("2016-12-24T16:48:17+00:00"),
-      DateTime.parse("2017-01-05T06:48:41+00:00")))
-    val result = Await.result(future, timeout.duration).asInstanceOf[mutable.WrappedArray[Measure]]
+      gardenApiKey,
+      sensorSlug,
+      DateTime.parse(startDate),
+      DateTime.parse(endDate)))
+    val result = Await.result(future, timeout.duration).asInstanceOf[mutable.WrappedArray[Measure]].toArray[Measure]
 
-    Future[Either[String, String]](
-      Left(result.toString())
+    Future[Either[String, Array[Measure]]] (
+      Right(result)
+    )
+  }
+
+  def alignMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String): Future[String] = {
+    implicit val timeout = Timeout(15, TimeUnit.SECONDS)
+    val future = ask(killrWeather.guardian, WeatherEvent.AlignMeasurePerRange(
+      gardenApiKey,
+      sensorSlug,
+      startDate,
+      endDate))
+    val result = Await.result(future, timeout.duration)
+
+    Future[String] (
+      "aligned!"
     )
   }
 
   val routes = {
     logRequestResult("akka-http-microservice") {
-      pathPrefix("ip") {
-        (get & path(Segment)) { ip =>
+      pathPrefix("get-measure-per-range") {
+        (post & entity(as[MeasureRequest])) { measureRequest =>
           complete {
-            fetchIpInfo(ip).map[ToResponseMarshallable] {
-              case Right(ipInfo) => ipInfo
-              case Left(errorMessage) => BadRequest -> errorMessage
-            }
-          }
-        } ~
-        (post & entity(as[IpPairSummaryRequest])) { ipPairSummaryRequest =>
-          complete {
-            val ip1InfoFuture = fetchIpInfo(ipPairSummaryRequest.ip1)
-            val ip2InfoFuture = fetchIpInfo(ipPairSummaryRequest.ip2)
-            ip1InfoFuture.zip(ip2InfoFuture).map[ToResponseMarshallable] {
-              case (Right(info1), Right(info2)) => IpPairSummary(info1, info2)
-              case (Left(errorMessage), _) => BadRequest -> errorMessage
-              case (_, Left(errorMessage)) => BadRequest -> errorMessage
-            }
+            getMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlug, measureRequest.startDate, measureRequest.endDate)
           }
         }
-      } ~
-      pathPrefix("spark-over-cassandra") {
-        complete {
-          fetchWeatherData()
+      } ~ pathPrefix("align-measure-per-range") {
+        (post & entity(as[MeasureRequest])) { measureRequest =>
+          complete {
+            alignMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlug, measureRequest.startDate, measureRequest.endDate)
+          }
         }
       }
     }

@@ -15,12 +15,21 @@
  */
 package com.datastax.killrweather
 
+import java.sql.Timestamp
+import java.time.{LocalDateTime, ZoneId, ZonedDateTime}
+
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.pattern.pipe
+import com.cloudera.sparkts.{DateTimeIndex, DayFrequency, TimeSeriesRDD}
 import com.datastax.spark.connector._
+import com.datastax.spark.connector.types.TimestampParser
 import org.apache.spark.SparkContext
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.util.StatCounter
 import org.joda.time.DateTime
+
+import scala.concurrent.Future
 
 /** The TemperatureActor reads the daily temperature rollup data from Cassandra,
   * and for a given weather station, computes temperature statistics by month for a given year.
@@ -35,11 +44,20 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
   def receive: Actor.Receive = {
     /** Greenhouse specific */
     case e: GetMeasurePerRange         => range(e.gardenApiKey, e.sensorSlug, e.startDate, e.endDate, sender)
+    case e: AlignMeasurePerRange       => align(e.gardenApiKey, e.sensorSlug, e.startDate, e.endDate, sender)
     /*case e: GetDailyTemperature        => daily(e.day, sender)
     case e: DailyTemperature           => store(e)
     case e: GetMonthlyHiLowTemperature => highLow(e, sender)*/
   }
 
+  /** Retrieves measures given a garden api key, a sensor and an interval
+    *
+    * @param gardenApiKey the gardenApiKey
+    * @param sensorSlug the sensorSlug
+    * @param startDate the startDate
+    * @param endDate the endDate
+    * @param requester the requester to be notified
+    */
   def range(gardenApiKey: String, sensorSlug: String, startDate: DateTime, endDate: DateTime, requester: ActorRef): Unit = {
     var years = "("
     for (i <- startDate.getYear() to endDate.getYear()) {
@@ -64,6 +82,68 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
       .collectAsync() pipeTo requester
   }
 
+  def align(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String, requester: ActorRef): Unit = {
+    val localStartDate = LocalDateTime.parse(startDate)
+    val localEndDate = LocalDateTime.parse(endDate)
+
+    var years = "("
+    for (i <- localStartDate.getYear() to localEndDate.getYear()) {
+      years += ("'" + i.toString() + "', ")
+    }
+    years = years.dropRight(2)
+    years += ")"
+
+    val rowRDD = sc.cassandraTable[Measure](greenhouseKeyspace, greenhouseRawtable)
+      .select(
+        "year",
+        "event_time",
+        "value",
+        "garden_api_key",
+        "sensor_slug",
+        "user_id")
+      .where("year in " + years + " AND garden_api_key = ? AND sensor_slug = ? AND event_time >= ? AND event_time <= ?",
+        gardenApiKey,
+        sensorSlug,
+        startDate.toString(),
+        endDate.toString())
+      .map(measure => Row(new Timestamp(TimestampParser.parse(measure.eventTime).getTime), measure.sensorSlug, measure.value))
+
+    val sqlContext = new SQLContext(sc)
+
+    val df = sqlContext.createDataFrame(rowRDD, StructType(Seq(
+      StructField("event_time", TimestampType, true),
+      StructField("sensor_slug", StringType, true),
+      StructField("value", DoubleType, true)
+    )))
+    val zone = ZoneId.systemDefault()
+    val targetIndex = DateTimeIndex.uniformFromInterval(
+      ZonedDateTime.of(localStartDate, zone),
+      ZonedDateTime.of(localEndDate, zone),
+      new DayFrequency(1))
+    val tsRdd = TimeSeriesRDD.timeSeriesRDDFromObservations(
+      targetIndex,
+      df,
+      "event_time", "sensor_slug", "value")
+
+    // Cache it in memory
+    tsRdd.cache()
+
+    // Count the number of series (number of symbols)
+    println(tsRdd.count())
+
+    tsRdd.foreach(item => {
+      println(item)
+    })
+
+    // Impute missing values using linear interpolation
+    val filled = tsRdd.fill("linear")
+
+    tsRdd.foreach(item => {
+      println(item)
+    })
+    Future() pipeTo requester
+  }
+
   /** Computes and sends the daily aggregation to the `requester` actor.
     * We aggregate this data on-demand versus in the stream.
     *
@@ -84,23 +164,6 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
       .map(toDaily(_, day)) pipeTo requester
 
   /**
-   * Computes and sends the monthly aggregation to the `requester` actor.
-   */
-  def highLow(e: GetMonthlyHiLowTemperature, requester: ActorRef): Unit =
-    sc.cassandraTable[DailyTemperature](keyspace, dailytable)
-      .where("wsid = ? AND year = ? AND month = ?", e.wsid, e.year, e.month)
-      .collectAsync()
-      .map(toMonthly(_, e.wsid, e.year, e.month)) pipeTo requester
-
-
-  /** Stores the daily temperature aggregates asynchronously which are triggered
-    * by on-demand requests during the `forDay` function's `self ! data`
-    * to the daily temperature aggregation table.
-    */
-  private def store(e: DailyTemperature): Unit =
-    sc.parallelize(Seq(e)).saveToCassandra(keyspace, dailytable)
-
-  /**
    * Would only be handling handles 0-23 small items.
    * We do 'self ! data' to async persist the aggregated data
    * but still return it immediately to the requester, vs make client wait.
@@ -115,14 +178,30 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
       data
     } else NoDataAvailable(key.wsid, key.year, classOf[DailyTemperature]) // not wanting to return an option to requester
 
+  private def toDailyTemperature(key: Day, stats: StatCounter): DailyTemperature =
+    DailyTemperature(key.wsid, key.year, key.month, key.day,
+      high = stats.max, low = stats.min, mean = stats.mean,
+      variance = stats.variance, stdev = stats.stdev)
+
+  /**
+   * Computes and sends the monthly aggregation to the `requester` actor.
+   */
+  def highLow(e: GetMonthlyHiLowTemperature, requester: ActorRef): Unit =
+    sc.cassandraTable[DailyTemperature](keyspace, dailytable)
+      .where("wsid = ? AND year = ? AND month = ?", e.wsid, e.year, e.month)
+      .collectAsync()
+      .map(toMonthly(_, e.wsid, e.year, e.month)) pipeTo requester
+
   private def toMonthly(aggregate: Seq[DailyTemperature], wsid: String, year: Int, month: Int): WeatherAggregate =
     if (aggregate.nonEmpty)
       MonthlyTemperature(wsid, year, month, aggregate.map(_.high).max, aggregate.map(_.low).min)
     else
       NoDataAvailable(wsid, year, classOf[MonthlyTemperature]) // not wanting to return an option to requester
 
-  private def toDailyTemperature(key: Day, stats: StatCounter): DailyTemperature =
-    DailyTemperature(key.wsid, key.year, key.month, key.day,
-      high = stats.max, low = stats.min, mean = stats.mean,
-      variance = stats.variance, stdev = stats.stdev)
+  /** Stores the daily temperature aggregates asynchronously which are triggered
+    * by on-demand requests during the `forDay` function's `self ! data`
+    * to the daily temperature aggregation table.
+    */
+  private def store(e: DailyTemperature): Unit =
+    sc.parallelize(Seq(e)).saveToCassandra(keyspace, dailytable)
 }

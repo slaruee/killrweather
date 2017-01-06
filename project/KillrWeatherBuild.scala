@@ -108,14 +108,13 @@ object Dependencies {
     val akkaSlf4j         = "com.typesafe.akka"   %% "akka-slf4j"                         % Akka
     val algebird          = "com.twitter"         %% "algebird-core"                      % Albebird
     val bijection         = "com.twitter"         %% "bijection-core"                     % Bijection
-    val driver            = "com.datastax.cassandra" % "cassandra-driver-core"            % CassandraDriver driverExclusions
     val jodaTime          = "joda-time"           % "joda-time"                           % JodaTime   % "compile;runtime" // ApacheV2
     val jodaConvert       = "org.joda"            % "joda-convert"                        % JodaConvert % "compile;runtime" // ApacheV2
     val json4sCore        = "org.json4s"          %% "json4s-core"                        % Json4s          // ApacheV2
     val json4sJackson     = "org.json4s"          %% "json4s-jackson"                     % Json4s          // ApacheV2
     val json4sNative      = "org.json4s"          %% "json4s-native"                      % Json4s          // ApacheV2
     val kafka             = "org.apache.kafka"    %% "kafka"                              % Kafka kafkaExclusions // ApacheV2
-    val kafkaStreaming    = "org.apache.spark"    %% "spark-streaming-kafka"              % Spark sparkExclusions // ApacheV2
+    val kafkaStreaming    = "org.apache.spark"    %% "spark-streaming-kafka-0-8"              % SparkStreamingKafka sparkExclusions // ApacheV2
     val logback           = "ch.qos.logback"      % "logback-classic"                     % Logback
     val scalazContrib     = "org.typelevel"       %% "scalaz-contrib-210"                 % ScalazContrib   // MIT
     val scalazContribVal  = "org.typelevel"       %% "scalaz-contrib-validation"          % ScalazContrib   // MIT
@@ -139,7 +138,9 @@ object Dependencies {
 
   val akka = Seq(akkaStream, akkaHttpCore, akkaHttp, akkaSprayJson, akkaActor, akkaCluster, akkaRemote, akkaSlf4j)
 
-  val connector = Seq(driver, sparkCassandra, sparkCatalyst, sparkCassandraEmb, sparkTs)
+  // WARNING: driver is commented on purpose
+  //          http://stackoverflow.com/questions/39034538/what-happens-nosuchmethoderror-com-datastax-driver-core-resultset-fetchmorere
+  val connector = Seq(/*driver, */sparkCassandra, sparkCatalyst, sparkCassandraEmb, sparkTs)
 
   val json = Seq(json4sCore, json4sJackson, json4sNative)
 

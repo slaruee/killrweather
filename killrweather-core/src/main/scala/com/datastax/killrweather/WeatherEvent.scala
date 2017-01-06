@@ -50,6 +50,7 @@ object WeatherEvent {
   /** Greenhouse specific */
   trait MeasureRequest extends WeatherRequest
   case class GetMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: DateTime, endDate: DateTime) extends MeasureRequest
+  case class AlignMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String) extends MeasureRequest
 
   sealed trait Task extends Serializable
   case object QueryTask extends Task
