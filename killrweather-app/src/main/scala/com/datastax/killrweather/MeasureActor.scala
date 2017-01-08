@@ -17,16 +17,16 @@ package com.datastax.killrweather
 
 import java.sql.Timestamp
 import java.time.{LocalDateTime, ZoneId, ZonedDateTime}
+import java.util.{Calendar, Date}
 
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.pattern.pipe
-import com.cloudera.sparkts.{DateTimeIndex, DayFrequency, TimeSeriesRDD}
+import com.cloudera.sparkts.{DateTimeIndex, MinuteFrequency, Resample, TimeSeriesRDD}
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.types.TimestampParser
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{Row, SQLContext}
-import org.apache.spark.util.StatCounter
 import org.joda.time.DateTime
 
 import scala.concurrent.Future
@@ -35,11 +35,11 @@ import scala.concurrent.Future
   * and for a given weather station, computes temperature statistics by month for a given year.
   */
 class MeasureActor(sc: SparkContext, settings: WeatherSettings)
-  extends AggregationActor with ActorLogging {
+  extends AggregationActor with ActorLogging with Serializable {
 
   import Weather._
   import WeatherEvent._
-  import settings.{CassandraGreenHouseKeySpace => greenhouseKeyspace, CassandraGreenhouseTableRaw => greenhouseRawtable, CassandraKeyspace => keyspace, CassandraTableDailyTemp => dailytable, CassandraTableRaw => rawtable}
+  import settings.{CassandraGreenHouseKeySpace => greenhouseKeyspace, CassandraGreenhouseTableRaw => greenhouseRawtable, CassandraGreenhouseTableSync => greenhouseSynctable}
 
   def receive: Actor.Receive = {
     /** Greenhouse specific */
@@ -82,6 +82,15 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
       .collectAsync() pipeTo requester
   }
 
+  /** Retrieves, aligns and store measures given a garden api key, a sensor and an interval so that time series are enabled
+    * for comparisons.
+    *
+    * @param gardenApiKey the gardenApiKey
+    * @param sensorSlug the sensorSlug
+    * @param startDate the startDate
+    * @param endDate the endDate
+    * @param requester the requester to be notified
+    */
   def align(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String, requester: ActorRef): Unit = {
     val localStartDate = LocalDateTime.parse(startDate)
     val localEndDate = LocalDateTime.parse(endDate)
@@ -110,98 +119,68 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
 
     val sqlContext = new SQLContext(sc)
 
-    val df = sqlContext.createDataFrame(rowRDD, StructType(Seq(
+    // 1. creating time series for resampling with real timestamps
+    // WARNING: we were not able to use TimeSeriesRDD.resample at this point
+    //          indeed a spark Serialization exception is thrown
+
+    val dataframe = sqlContext.createDataFrame(rowRDD, StructType(Seq(
       StructField("event_time", TimestampType, true),
       StructField("sensor_slug", StringType, true),
       StructField("value", DoubleType, true)
     )))
     val zone = ZoneId.systemDefault()
-    val targetIndex = DateTimeIndex.uniformFromInterval(
-      ZonedDateTime.of(localStartDate, zone),
-      ZonedDateTime.of(localEndDate, zone),
-      new DayFrequency(1))
-    val tsRdd = TimeSeriesRDD.timeSeriesRDDFromObservations(
-      targetIndex,
-      df,
+    val originIndex = DateTimeIndex.irregular(rowRDD.map(row => {
+      row.getTimestamp(0).getTime * 1000000
+    }).collect())
+    val timeSeriesRdd = TimeSeriesRDD.timeSeriesRDDFromObservations(
+      originIndex,
+      dataframe,
       "event_time", "sensor_slug", "value")
 
-    // Cache it in memory
-    tsRdd.cache()
+    // 2. resampling time series with closest quarters
 
-    // Count the number of series (number of symbols)
-    println(tsRdd.count())
+    def aggr(arr: Array[Double], start: Int, end: Int) = {
+      arr.slice(start, end).sum
+    }
 
-    tsRdd.foreach(item => {
-      println(item)
-    })
+    val firstVector = timeSeriesRdd.values.first() // WARNING: no other vector must exist at this point, only one sensor is provided
+    val resampledVector = Resample.resample(firstVector, originIndex, DateTimeIndex.uniformFromInterval(
+      ZonedDateTime.of(localStartDate, zone),
+      ZonedDateTime.of(localEndDate, zone),
+      new MinuteFrequency(15)), aggr, false, false)
 
-    // Impute missing values using linear interpolation
-    val filled = tsRdd.fill("linear")
+    var measures: Seq[Measure] = Seq()
+    val leftDate = roundDateToClosestQuarter(new Date(rowRDD.first().getTimestamp(0).getTime))
+    val calendar = Calendar.getInstance()
+    for(i <- 0 to resampledVector.size - 1) {
+      leftDate.setTime(leftDate.getTime + 60000 * 15)
+      calendar.setTime(leftDate)
+      measures = measures :+ Measure(calendar.get(Calendar.YEAR).toString, leftDate.toInstant.toString, resampledVector(i), gardenApiKey, sensorSlug, 0)
+    }
 
-    tsRdd.foreach(item => {
-      println(item)
-    })
+    // 3. Storing aligned data
+    store(measures)
+
     Future() pipeTo requester
   }
-
-  /** Computes and sends the daily aggregation to the `requester` actor.
-    * We aggregate this data on-demand versus in the stream.
-    *
-    * For the given day of the year, aggregates 0 - 23 temp values to statistics:
-    * high, low, mean, std, etc., and persists to Cassandra daily temperature table
-    * by weather station, automatically sorted by most recent - due to our cassandra schema -
-    * you don't need to do a sort in spark.
-    *
-    * Because the gov. data is not by interval (window/slide) but by specific date/time
-    * we look for historic data for hours 0-23 that may or may not already exist yet
-    * and create stats on does exist at the time of request.
-    */
-  def daily(day: Day, requester: ActorRef): Unit =
-    sc.cassandraTable[Double](keyspace, rawtable)
-      .select("temperature").where("wsid = ? AND year = ? AND month = ? AND day = ?",
-        day.wsid, day.year, day.month, day.day)
-      .collectAsync()
-      .map(toDaily(_, day)) pipeTo requester
-
-  /**
-   * Would only be handling handles 0-23 small items.
-   * We do 'self ! data' to async persist the aggregated data
-   * but still return it immediately to the requester, vs make client wait.
-   *
-   * @return If no hourly data available, returns [[NoDataAvailable]]
-   *         else [[DailyTemperature]] with mean, variance,stdev,hi,low stats.
-   */
-  private def toDaily(aggregate: Seq[Double], key: Day): WeatherAggregate =
-    if (aggregate.nonEmpty) {
-      val data = toDailyTemperature(key, StatCounter(aggregate))
-      self ! data
-      data
-    } else NoDataAvailable(key.wsid, key.year, classOf[DailyTemperature]) // not wanting to return an option to requester
-
-  private def toDailyTemperature(key: Day, stats: StatCounter): DailyTemperature =
-    DailyTemperature(key.wsid, key.year, key.month, key.day,
-      high = stats.max, low = stats.min, mean = stats.mean,
-      variance = stats.variance, stdev = stats.stdev)
-
-  /**
-   * Computes and sends the monthly aggregation to the `requester` actor.
-   */
-  def highLow(e: GetMonthlyHiLowTemperature, requester: ActorRef): Unit =
-    sc.cassandraTable[DailyTemperature](keyspace, dailytable)
-      .where("wsid = ? AND year = ? AND month = ?", e.wsid, e.year, e.month)
-      .collectAsync()
-      .map(toMonthly(_, e.wsid, e.year, e.month)) pipeTo requester
-
-  private def toMonthly(aggregate: Seq[DailyTemperature], wsid: String, year: Int, month: Int): WeatherAggregate =
-    if (aggregate.nonEmpty)
-      MonthlyTemperature(wsid, year, month, aggregate.map(_.high).max, aggregate.map(_.low).min)
-    else
-      NoDataAvailable(wsid, year, classOf[MonthlyTemperature]) // not wanting to return an option to requester
 
   /** Stores the daily temperature aggregates asynchronously which are triggered
     * by on-demand requests during the `forDay` function's `self ! data`
     * to the daily temperature aggregation table.
     */
-  private def store(e: DailyTemperature): Unit =
-    sc.parallelize(Seq(e)).saveToCassandra(keyspace, dailytable)
+  private def store(e: Seq[Measure]): Unit =
+    sc.parallelize(e).saveToCassandra(greenhouseKeyspace, greenhouseSynctable)
+
+  private def roundDateToClosestQuarter(whateverDateYouWant: Date): Date = {
+    val calendar = Calendar.getInstance()
+    calendar.setTime(whateverDateYouWant)
+
+    val unroundedMinutes = calendar.get(Calendar.MINUTE)
+    val mod: Int = unroundedMinutes % 15
+    calendar.add(Calendar.MINUTE, if(mod < 8) -mod else (15 - mod))
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+
+    calendar.getTime
+  }
 }

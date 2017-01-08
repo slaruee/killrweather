@@ -19,9 +19,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.actor._
 import akka.cluster.Cluster
-import org.apache.spark.streaming.{Milliseconds, StreamingContext}
-import org.apache.spark.SparkConf
+import com.cloudera.sparkts.TimeSeriesKryoRegistrator
 import com.datastax.spark.connector.embedded.EmbeddedKafka
+import org.apache.spark.SparkConf
+import org.apache.spark.streaming.{Milliseconds, StreamingContext}
 
 import scala.concurrent.Future
 
@@ -57,7 +58,6 @@ object KillrWeather extends ExtensionId[KillrWeather] with ExtensionIdProvider {
 
 class KillrWeather(system: ExtendedActorSystem) extends Extension {
   import WeatherEvent.GracefulShutdown
-
   import system.dispatcher
 
   system.registerOnTermination(shutdown())
@@ -84,6 +84,7 @@ class KillrWeather(system: ExtendedActorSystem) extends Extension {
     .setMaster(SparkMaster)
     .set("spark.cassandra.connection.host", CassandraHosts)
     .set("spark.cleaner.ttl", SparkCleanerTtl.toString)
+  TimeSeriesKryoRegistrator.registerKryoClasses(conf)
 
   /** Creates the Spark Streaming context. */
   protected val ssc = new StreamingContext(conf, Milliseconds(SparkStreamingBatchInterval))
