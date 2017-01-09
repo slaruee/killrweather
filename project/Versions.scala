@@ -22,7 +22,7 @@ object Versions {
   val Bijection      = "0.7.0"
   val Cassandra      = "2.1.3"
   val CassandraDriver = "3.0.0"
-  val JDK            = "1.7"
+  val JDK            = "1.8"
   val JodaConvert    = "1.7"
   val JodaTime       = "2.4"
   val Json4s         = "3.2.10"

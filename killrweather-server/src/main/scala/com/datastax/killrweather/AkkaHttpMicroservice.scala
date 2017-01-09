@@ -1,5 +1,6 @@
 package com.datastax.killrweather;
 
+import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
@@ -12,19 +13,42 @@ import akka.stream.{ActorMaterializer, Materializer}
 import akka.util.Timeout
 import com.datastax.killrweather.Weather.Measure
 import com.typesafe.config.{Config, ConfigFactory}
-import org.joda.time.DateTime
-import spray.json.DefaultJsonProtocol
+import spray.json.{DefaultJsonProtocol, DeserializationException, JsArray, JsString, JsValue, RootJsonFormat}
 
 import scala.collection.mutable
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
-/** Greenhouse specific */
-case class MeasureRequest(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String)
+case class MeasureRequest(gardenApiKey: String, sensorSlugs: Array[String], startDate: String, endDate: String)
+case class AlignMeasureRequest(gardenApiKey: String, sensorSlugs: Array[String], startDate: String, endDate: String)
 
 trait Protocols extends DefaultJsonProtocol {
-  /** Greenhouse specific */
-  implicit val measureRequestFormat = jsonFormat4(MeasureRequest.apply)
+  implicit object measureRequestFormat extends RootJsonFormat[MeasureRequest] {
+    def write(r: MeasureRequest) =
+      throw new NotImplementedError()
+
+    def read(value: JsValue) = {
+      value.asJsObject.getFields("gardenApiKey", "sensorSlugs", "startDate", "endDate") match {
+        case Seq(JsString(gardenApiKey), JsArray(sensorSlugs), JsString(startDate), JsString(endDate)) =>
+          new MeasureRequest(gardenApiKey, sensorSlugs.map(value => String.valueOf(value).replaceAll("\"", "")).toArray[String], startDate, endDate)
+        case _ => throw new DeserializationException("MeasureRequest expected")
+      }
+    }
+  }
+
   implicit val measureFormat = jsonFormat6(Measure.apply)
+
+  implicit object alignMeasureRequestFormat extends RootJsonFormat[AlignMeasureRequest] {
+    def write(r: AlignMeasureRequest) =
+      throw new NotImplementedError()
+
+    def read(value: JsValue) = {
+      value.asJsObject.getFields("gardenApiKey", "sensorSlugs", "startDate", "endDate") match {
+        case Seq(JsString(gardenApiKey), JsArray(sensorSlugs), JsString(startDate), JsString(endDate)) =>
+          new AlignMeasureRequest(gardenApiKey, sensorSlugs.map(value => String.valueOf(value).replaceAll("\"", "")).toArray[String], startDate, endDate)
+        case _ => throw new DeserializationException("MeasureRequest expected")
+      }
+    }
+  }
 }
 
 trait Service extends Protocols {
@@ -36,13 +60,13 @@ trait Service extends Protocols {
   def config: Config
   val logger: LoggingAdapter
 
-  def getMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String): Future[Either[String, Array[Measure]]] = {
+  def getMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: String, endDate: String): Future[Either[String, Array[Measure]]] = {
     implicit val timeout = Timeout(15, TimeUnit.SECONDS)
     val future = ask(killrWeather.guardian, WeatherEvent.GetMeasurePerRange(
       gardenApiKey,
-      sensorSlug,
-      DateTime.parse(startDate),
-      DateTime.parse(endDate)))
+      sensorSlugs,
+      OffsetDateTime.parse(startDate),
+      OffsetDateTime.parse(endDate)))
     val result = Await.result(future, timeout.duration).asInstanceOf[mutable.WrappedArray[Measure]].toArray[Measure]
 
     Future[Either[String, Array[Measure]]] (
@@ -50,13 +74,14 @@ trait Service extends Protocols {
     )
   }
 
-  def alignMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String): Future[String] = {
-    implicit val timeout = Timeout(15, TimeUnit.SECONDS)
+  def alignMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: String, endDate: String): Future[String] = {
+    implicit val timeout = Timeout(2, TimeUnit.MINUTES)
     val future = ask(killrWeather.guardian, WeatherEvent.AlignMeasurePerRange(
       gardenApiKey,
-      sensorSlug,
-      startDate,
-      endDate))
+      sensorSlugs,
+      OffsetDateTime.parse(startDate),
+      OffsetDateTime.parse(endDate)))
+    // TODO: replace with a timeout value
     val result = Await.result(future, timeout.duration)
 
     Future[String] (
@@ -69,13 +94,13 @@ trait Service extends Protocols {
       pathPrefix("get-measure-per-range") {
         (post & entity(as[MeasureRequest])) { measureRequest =>
           complete {
-            getMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlug, measureRequest.startDate, measureRequest.endDate)
+            getMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlugs, measureRequest.startDate, measureRequest.endDate)
           }
         }
       } ~ pathPrefix("align-measure-per-range") {
-        (post & entity(as[MeasureRequest])) { measureRequest =>
+        (post & entity(as[AlignMeasureRequest])) { measureRequest =>
           complete {
-            alignMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlug, measureRequest.startDate, measureRequest.endDate)
+            alignMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlugs, measureRequest.startDate, measureRequest.endDate)
           }
         }
       }

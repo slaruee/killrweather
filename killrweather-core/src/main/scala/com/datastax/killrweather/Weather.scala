@@ -158,7 +158,7 @@ object Weather {
 
   /** Greenhouse specific */
   trait RawMeasure extends WeatherModel with Serializable {
-    def year: String
+    def month: String
     def eventTime: String
     def value: Double
     def gardenApiKey: String
@@ -166,7 +166,7 @@ object Weather {
     def userId: BigInt
   }
 
-  case class Measure(year: String,
+  case class Measure(month: String,
                      eventTime: String,
                      value: Double,
                      gardenApiKey: String,

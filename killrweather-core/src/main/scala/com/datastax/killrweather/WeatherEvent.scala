@@ -15,6 +15,8 @@
  */
 package com.datastax.killrweather
 
+import java.time.OffsetDateTime
+
 import org.joda.time.DateTime
 
 // TODO document the Event API
@@ -49,8 +51,8 @@ object WeatherEvent {
 
   /** Greenhouse specific */
   trait MeasureRequest extends WeatherRequest
-  case class GetMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: DateTime, endDate: DateTime) extends MeasureRequest
-  case class AlignMeasurePerRange(gardenApiKey: String, sensorSlug: String, startDate: String, endDate: String) extends MeasureRequest
+  case class GetMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime) extends MeasureRequest
+  case class AlignMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime) extends MeasureRequest
 
   sealed trait Task extends Serializable
   case object QueryTask extends Task
