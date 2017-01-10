@@ -164,7 +164,7 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
       for (j <- 0 until currResampledVector.size) {
         val nextDate = leftDate.plus(j * 15, ChronoUnit.MINUTES)
         measures = measures :+ Measure(
-          nextDate.getYear.toString + "/" + f"${leftDate.getMonthValue}%02d",
+          nextDate.getYear.toString + "/" + f"${nextDate.getMonthValue}%02d",
           nextDate.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")) /* ISO format */,
           currResampledVector(j),
           gardenApiKey,
