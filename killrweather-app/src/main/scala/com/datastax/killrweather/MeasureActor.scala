@@ -57,8 +57,8 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     * @param requester the requester to be notified
     */
   def range(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime, requester: ActorRef): Unit = {
-    val months = buildMonths(startDate.toLocalDateTime, endDate.toLocalDateTime)
-    val slugs = buildSlugs(sensorSlugs)
+    val months = concatenateMonths(startDate.toLocalDateTime, endDate.toLocalDateTime)
+    val slugs = concatenateSlugs(sensorSlugs)
 
     sc.cassandraTable[Measure](greenhouseKeyspace, greenhouseRawtable)
       .select(
@@ -89,8 +89,8 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     val localStartDate = startDate.toLocalDateTime
     val localEndDate = endDate.toLocalDateTime
 
-    val months = buildMonths(localStartDate, localEndDate)
-    val slugs = buildSlugs(sensorSlugs)
+    val months = concatenateMonths(localStartDate, localEndDate)
+    val slugs = concatenateSlugs(sensorSlugs)
 
     val rowRDD = sc.cassandraTable[Measure](greenhouseKeyspace, greenhouseRawtable)
       .select(
@@ -143,7 +143,7 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
 
     val tsSensorSlugs = timeSeriesRdd.keys
     for (i <- 0 until timeSeriesRdd.values.count().toInt) {
-      var currSensorSlug = tsSensorSlugs(i)
+      val currSensorSlug = tsSensorSlugs(i)
       val currSensorVector = timeSeriesRdd.filter(series => {
         series._1.equals(currSensorSlug)
       }).removeInstantsWithNaNs().values.first()
@@ -162,7 +162,7 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
 
       val leftDate = roundDateToClosestQuarter(originIndex.first)
       for (j <- 0 until currResampledVector.size) {
-        val nextDate = leftDate.plus(j * 15, ChronoUnit.MINUTES)
+        val nextDate = leftDate.plus(j * 15, ChronoUnit.MINUTES).toInstant.atZone(zone)
         measures = measures :+ Measure(
           nextDate.getYear.toString + "/" + f"${nextDate.getMonthValue}%02d",
           nextDate.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")) /* ISO format */,
@@ -193,14 +193,16 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     * @tparam D a LocalDateTime
     * @return a list of months formatted for cassandra
     */
-  private def buildMonths[D <: LocalDateTime](startDate: D, endDate: D): String = {
+  private def concatenateMonths[D <: LocalDateTime](startDate: D, endDate: D): String = {
     var months = "("
     var amount = startDate.until(endDate, ChronoUnit.MONTHS);
-    if (amount == 0 && startDate.getMonth != endDate.getMonth) {
+    if (startDate.getMonth != endDate.getMonth) {
       amount += 1
     }
     for (i <- 0 to amount.toInt) {
-      months += ("'" + startDate.plus(i, ChronoUnit.MONTHS).getYear.toString + "/" + f"${startDate.plus(i, ChronoUnit.MONTHS).getMonthValue}%02d" + "', ")
+      // TODO: optimize addition below which could be called once
+      val nextDate = startDate.plus(i, ChronoUnit.MONTHS)
+      months += ("'" + nextDate.getYear.toString + "/" + f"${nextDate.getMonthValue}%02d" + "', ")
     }
     months = months.dropRight(2)
     months += ")"
@@ -213,7 +215,7 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     * @param sensorSlugs a collection of sensors' slugs
     * @return a collection of sensors' slugs formatted for cassandra
     */
-  private def buildSlugs(sensorSlugs: Array[String]): String = {
+  private def concatenateSlugs(sensorSlugs: Array[String]): String = {
     var slugs = "("
     for (i <- 0 until sensorSlugs.length) {
       slugs += ("'" + sensorSlugs(i) + "', ")
