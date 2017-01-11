@@ -144,6 +144,7 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     val tsSensorSlugs = timeSeriesRdd.keys
     for (i <- 0 until timeSeriesRdd.values.count().toInt) {
       val currSensorSlug = tsSensorSlugs(i)
+      // WARNING: removeInstantsWithNaNs seems to lead to java.lang.ArrayIndexOutOfBoundsException with several sensors
       val currSensorVector = timeSeriesRdd.filter(series => {
         series._1.equals(currSensorSlug)
       }).removeInstantsWithNaNs().values.first()
