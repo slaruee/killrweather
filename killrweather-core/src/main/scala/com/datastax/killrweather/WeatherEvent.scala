@@ -53,6 +53,7 @@ object WeatherEvent {
   trait MeasureRequest extends WeatherRequest
   case class GetMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime) extends MeasureRequest
   case class AlignMeasurePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime) extends MeasureRequest
+  case class AggregateDailyDistancePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime) extends MeasureRequest
 
   sealed trait Task extends Serializable
   case object QueryTask extends Task

@@ -114,7 +114,7 @@ object Dependencies {
     val json4sJackson     = "org.json4s"          %% "json4s-jackson"                     % Json4s          // ApacheV2
     val json4sNative      = "org.json4s"          %% "json4s-native"                      % Json4s          // ApacheV2
     val kafka             = "org.apache.kafka"    %% "kafka"                              % Kafka kafkaExclusions // ApacheV2
-    val kafkaStreaming    = "org.apache.spark"    %% "spark-streaming-kafka-0-8"              % SparkStreamingKafka sparkExclusions // ApacheV2
+    val kafkaStreaming    = "org.apache.spark"    %% "spark-streaming-kafka-0-8"          % SparkStreamingKafka sparkExclusions // ApacheV2
     val logback           = "ch.qos.logback"      % "logback-classic"                     % Logback
     val scalazContrib     = "org.typelevel"       %% "scalaz-contrib-210"                 % ScalazContrib   // MIT
     val scalazContribVal  = "org.typelevel"       %% "scalaz-contrib-validation"          % ScalazContrib   // MIT
@@ -127,6 +127,7 @@ object Dependencies {
     val sparkCassandraEmb = "com.datastax.spark"  %% "spark-cassandra-connector-embedded" % SparkCassandra embeddedExclusions // ApacheV2
     var sparkTs           = "com.cloudera.sparkts" % "sparkts"                            % SparkTs
     val sigar             = "org.fusesource"      % "sigar"                               % Sigar
+    val rscala            = "org.ddahl"           %% "rscala"                             % RScala
   }
 
   object Test {
@@ -158,7 +159,7 @@ object Dependencies {
   val core = akka ++ logging ++ time
 
   val app = connector ++ json ++ scalaz ++ test ++
-    Seq(algebird, bijection, kafka, kafkaStreaming, pickling, sparkML, sigar)
+    Seq(algebird, bijection, kafka, kafkaStreaming, pickling, sparkML, sigar, rscala)
 
   val examples = connector ++ time ++ json ++
     Seq(kafka, kafkaStreaming, sparkML, "org.slf4j" % "slf4j-log4j12" % "1.6.1")

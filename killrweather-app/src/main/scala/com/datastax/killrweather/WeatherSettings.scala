@@ -169,6 +169,7 @@ final class WeatherSettings(conf: Option[Config] = None) extends Serializable {
   val CassandraGreenHouseKeySpace = killrweather.getString("cassandra.greenhouse.keyspace")
   val CassandraGreenhouseTableRaw = killrweather.getString("cassandra.greenhouse.table.raw")
   val CassandraGreenhouseTableSync = killrweather.getString("cassandra.greenhouse.table.sync")
+  val CassandraGreenhouseTableDailyDistance = killrweather.getString("cassandra.greenhouse.table.daily_distance")
 
   /** Attempts to acquire from environment, then java system properties. */
   def withFallback[T](env: Try[T], key: String): Option[T] = env match {

@@ -41,4 +41,5 @@ object Versions {
   val SparkStreamingKafka = "2.0.0-preview"
   val SparkCassandra = "2.0.0-M3"
   val SparkTs        = "0.4.1"
+  val RScala         = "1.0.14"
 }

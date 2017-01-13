@@ -16,6 +16,9 @@
 package com.datastax.killrweather
 
 import org.joda.time.DateTime
+import spray.json.{DefaultJsonProtocol, JsArray, JsNumber, JsObject, JsValue, RootJsonFormat}
+
+import scala.collection.mutable.ArrayBuffer
 
 object Weather {
 
@@ -172,4 +175,19 @@ object Weather {
                      gardenApiKey: String,
                      sensorSlug: String,
                      userId: BigInt) extends RawMeasure
+
+  case class MeasureTimeSerie(interval: ArrayBuffer[Long], data: ArrayBuffer[Double])
+
+  object MeasureTimeSerieJsonProtocol extends DefaultJsonProtocol {
+    implicit object MeasureTimeSerieJsonFormat extends RootJsonFormat[MeasureTimeSerie] {
+      def write(c: MeasureTimeSerie) = JsObject(
+        "interval" -> JsArray(c.interval.toVector.map(interval => JsNumber(interval))),
+        "data" -> JsArray(c.data.toVector.map(interval => JsNumber(interval)))
+      )
+
+      def read(value: JsValue) = value match {
+        case _ => throw new NotImplementedError()
+      }
+    }
+  }
 }

@@ -85,7 +85,22 @@ trait Service extends Protocols {
     val result = Await.result(future, timeout.duration)
 
     Future[String] (
-      "aligned!"
+      "time series aligned!"
+    )
+  }
+
+  def aggregateDailyDistancePerRange(gardenApiKey: String, sensorSlugs: Array[String], startDate: String, endDate: String): Future[String] = {
+    implicit val timeout = Timeout(2, TimeUnit.MINUTES)
+    val future = ask(killrWeather.guardian, WeatherEvent.AggregateDailyDistancePerRange(
+      gardenApiKey,
+      sensorSlugs,
+      OffsetDateTime.parse(startDate),
+      OffsetDateTime.parse(endDate)))
+    // TODO: replace with a timeout value
+    val result = Await.result(future, timeout.duration)
+
+    Future[String] (
+      "daily distance aggregated!"
     )
   }
 
@@ -101,6 +116,12 @@ trait Service extends Protocols {
         (post & entity(as[AlignMeasureRequest])) { measureRequest =>
           complete {
             alignMeasurePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlugs, measureRequest.startDate, measureRequest.endDate)
+          }
+        }
+      } ~ pathPrefix("aggregate-daily-distance-per-range") {
+        (post & entity(as[AlignMeasureRequest])) { measureRequest =>
+          complete {
+            aggregateDailyDistancePerRange(measureRequest.gardenApiKey, measureRequest.sensorSlugs, measureRequest.startDate, measureRequest.endDate)
           }
         }
       }

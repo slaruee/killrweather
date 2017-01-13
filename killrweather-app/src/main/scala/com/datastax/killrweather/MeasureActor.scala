@@ -19,11 +19,12 @@ import java.sql.Timestamp
 import java.time._
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import java.util.Calendar
+import java.util.{Calendar, TimeZone}
 
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.pattern.pipe
 import com.cloudera.sparkts.{DateTimeIndex, MinuteFrequency, TimeSeriesRDD}
+import com.datastax.killrweather.Weather.MeasureTimeSerieJsonProtocol._
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.rdd.ClusteringOrder
 import com.datastax.spark.connector.types.TimestampParser
@@ -31,7 +32,10 @@ import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{Row, SQLContext}
+import org.ddahl.rscala.RClient
+import spray.json._
 
+import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 
 /** The MeasureActor reads the measures rollup data from Cassandra,
@@ -45,8 +49,9 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
   import settings.{CassandraGreenHouseKeySpace => greenhouseKeyspace, CassandraGreenhouseTableRaw => greenhouseRawtable, CassandraGreenhouseTableSync => greenhouseSynctable}
 
   def receive: Actor.Receive = {
-    case e: GetMeasurePerRange         => range(e.gardenApiKey, e.sensorSlugs, e.startDate, e.endDate, sender)
-    case e: AlignMeasurePerRange       => align(e.gardenApiKey, e.sensorSlugs, e.startDate, e.endDate, sender)
+    case e: GetMeasurePerRange              => range(e.gardenApiKey, e.sensorSlugs, e.startDate, e.endDate, sender)
+    case e: AlignMeasurePerRange            => align(e.gardenApiKey, e.sensorSlugs, e.startDate, e.endDate, sender)
+    case e: AggregateDailyDistancePerRange  => dailyDistance(e.gardenApiKey, e.sensorSlugs, e.startDate, e.endDate, sender)
   }
 
   /** Retrieves measures given a garden and an interval
@@ -187,6 +192,98 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
   private def store(e: Seq[Measure]): Unit =
     sc.parallelize(e).saveToCassandra(greenhouseKeyspace, greenhouseSynctable)
 
+  /**
+    * Rounds date to closest quarter.
+    *
+    * @param date the date
+    * @return the rounded date
+    */
+  private def roundDateToClosestQuarter(date: ZonedDateTime): ZonedDateTime = {
+    val calendar = Calendar.getInstance()
+    calendar.setTimeInMillis(date.toInstant.toEpochMilli)
+
+    val unroundedMinutes = calendar.get(Calendar.MINUTE)
+    val mod: Int = unroundedMinutes % 15
+    calendar.add(Calendar.MINUTE, if(mod < 8) -mod else (15 - mod))
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+
+    TimeSeriesUtils.longToZonedDateTime(calendar.getTimeInMillis * 1000000, ZoneId.of(calendar.getTimeZone.getID))
+  }
+
+  /** Aggregates sensors' time series per day, computes its distance against the previous day and stores the result.
+    *
+    * @param gardenApiKey the gardenApiKey
+    * @param sensorSlugs the collection of sensors' slugs
+    * @param startDate the startDate
+    * @param endDate the endDate
+    * @param requester the requester to be notified
+    **/
+  def dailyDistance(gardenApiKey: String, sensorSlugs: Array[String], startDate: OffsetDateTime, endDate: OffsetDateTime, requester: ActorRef): Unit = {
+    def computeDistance(lhs: MeasureTimeSerie, rhs: MeasureTimeSerie): Double = {
+      val R = RClient()
+
+      R.synchronized{ R eval """
+        library(jsonlite)
+        library(TSdist)
+
+        computeEuclideanDistance <- function(ts1AsJson, ts2AsJson) {
+          ts1 <- ts(fromJSON(ts1AsJson), frequency=24*60/15)
+          ts2 <- ts(fromJSON(ts2AsJson), frequency=24*60/15)
+          EuclideanDistance(ts1$data, ts2$data)
+        }
+      """}
+
+      // WARNING: aligning time series below. we previously asserted that data & interval lengths are equal
+      R.synchronized{R.evalD0(s"computeEuclideanDistance('${lhs.toJson}', '${MeasureTimeSerie(lhs.interval, rhs.data).toJson}')")}
+    }
+
+    val months = concatenateMonths(startDate.toLocalDateTime, endDate.toLocalDateTime)
+    val slugs = concatenateSlugs(sensorSlugs)
+
+    var ts = Map[LocalDate, MeasureTimeSerie]()
+    val calendar = Calendar.getInstance()
+    val zone = ZoneId.of(startDate.getOffset.getId)
+
+    sc.cassandraTable[Measure](greenhouseKeyspace, greenhouseSynctable)
+      .select(
+        "month",
+        "event_time",
+        "value",
+        "garden_api_key",
+        "sensor_slug",
+        "user_id")
+      .where("month in " + months + " AND sensor_slug in " + slugs + " AND garden_api_key = ? AND event_time >= ? AND event_time <= ?",
+        gardenApiKey,
+        startDate.toString(),
+        endDate.toString())
+      .collect()
+      .foreach(measure => {
+        val date = TimestampParser.parse(measure.eventTime)
+        calendar.setTime(date)
+        calendar.setTimeZone(TimeZone.getTimeZone(zone))
+
+        val key = LocalDate.of(calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH) + 1, calendar.get(Calendar.DAY_OF_MONTH))
+        if (ts.get(key) == None) {
+          ts += key -> MeasureTimeSerie(ArrayBuffer(), ArrayBuffer())
+        }
+        ts(key).interval += date.toInstant.toEpochMilli / 1000000
+        ts(key).data += measure.value
+      })
+
+    val dates = ts.keys.toArray.sortBy(date => date.toEpochDay)
+    val datePairs = dates.slice(0, dates.length - 1) zip dates.slice(1, dates.length)
+    for (datePair <- datePairs) {
+      if(ts(datePair._1).interval.length == ts(datePair._2).interval.length &&
+        ts(datePair._1).data.length == ts(datePair._2).data.length) {
+        val distance = computeDistance(ts(datePair._1), ts(datePair._2))
+
+      }
+    }
+
+    Future() pipeTo requester
+  }
+
   /** Builds a months string for cassandra query
     *
     * @param startDate a start date
@@ -225,25 +322,6 @@ class MeasureActor(sc: SparkContext, settings: WeatherSettings)
     slugs += ")"
 
     return slugs
-  }
-
-  /**
-    * Rounds date to closest quarter.
-    *
-    * @param date the date
-    * @return the rounded date
-    */
-  private def roundDateToClosestQuarter(date: ZonedDateTime): ZonedDateTime = {
-    val calendar = Calendar.getInstance()
-    calendar.setTimeInMillis(date.toInstant.toEpochMilli)
-
-    val unroundedMinutes = calendar.get(Calendar.MINUTE)
-    val mod: Int = unroundedMinutes % 15
-    calendar.add(Calendar.MINUTE, if(mod < 8) -mod else (15 - mod))
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-
-    TimeSeriesUtils.longToZonedDateTime(calendar.getTimeInMillis * 1000000, ZoneId.of(calendar.getTimeZone.getID))
   }
 }
 
